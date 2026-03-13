@@ -243,23 +243,42 @@ check_online_version() {
             rm "$temp_file"
         fi
     else
+        # Use GitHub API for more reliable version detection
         if [ "$use_cdn" = 'yes' ]; then
-            releases_url="https://github.abskoop.workers.dev/https://github.com/daeuniverse/dae/releases/latest"
+            api_url="https://github.abskoop.workers.dev/https://api.github.com/repos/daeuniverse/dae/releases/latest"
         else
-            releases_url="https://github.com/daeuniverse/dae/releases/latest"
+            api_url="https://api.github.com/repos/daeuniverse/dae/releases/latest"
         fi
         temp_file="$(mktemp /tmp/dae.XXXXXX)"
-        if ! curl -sL "$releases_url" | \
-             grep '<h1 data-view-component="true" class="d-inline mr-3">' | \
-             awk -F ' <h1 data-view-component="true" class="d-inline mr-3">' '{print $2}' | \
-             awk -F '</h1>' '{print $1}' | \
-             tee "$temp_file" >> /dev/null; then
+        if ! curl -sL "$api_url" -o "$temp_file"; then
             echo_red "error: Failed to get the latest version of dae!"
             echo_red "Please check your network and try again."
+            rm -f "$temp_file"
             exit 1
-        else
-            latest_version="$(cat "$temp_file" | head -n 1)"
+        fi
+        # Parse JSON response to get tag_name
+        latest_version="$(grep '"tag_name":' "$temp_file" | head -n 1 | awk -F '"' '{print $4}')"
+        rm "$temp_file"
+
+        # Fallback to HTML parsing if API fails
+        if [ -z "$latest_version" ]; then
+            if [ "$use_cdn" = 'yes' ]; then
+                releases_url="https://github.abskoop.workers.dev/https://github.com/daeuniverse/dae/releases/latest"
+            else
+                releases_url="https://github.com/daeuniverse/dae/releases/latest"
+            fi
+            temp_file="$(mktemp /tmp/dae.XXXXXX)"
+            # Try to extract version from URL redirect
+            if curl -sLI "$releases_url" | grep -i "^location:" | tee "$temp_file" >> /dev/null; then
+                latest_version="$(awk -F '/tag/' '{print $2}' < "$temp_file" | tr -d '\r\n')"
+            fi
             rm "$temp_file"
+        fi
+
+        if [ -z "$latest_version" ]; then
+            echo_red "error: Failed to parse the latest version of dae!"
+            echo_red "Please check your network and try again."
+            exit 1
         fi
     fi
 }
@@ -268,7 +287,7 @@ compare_version() {
     if [ "$latest_version" = "$current_version" ]; then
         compare_status=0            # Don't need update
     elif  [ "$(echo "$current_version" | grep -Eo "v[0-9]+\.[0-9]+\.[0-9]+" )" = "$(echo "$latest_version" | grep -Eo "v[0-9]+\.[0-9]+\.[0-9]+")" ]; then
-        if ! grep -q -E 'rc' < "$latest_version"; then
+        if ! echo "$latest_version" | grep -q -E 'rc'; then
             compare_status=2        # Local version is less than remote version
         fi
     elif [ "$(printf '%s\n' "$current_version" "$latest_version" | sort -V | head -n1)" = "$current_version" ]; then
